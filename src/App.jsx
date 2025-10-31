@@ -1,171 +1,166 @@
-import { useState, useRef, useEffect } from "react";
-import Progress from "./components/Progress";
+import { useState, useCallback } from "react";
+import { Loader2 } from "lucide-react";
 import AudioPlayer from "./components/AudioPlayer";
-import { SPEAKERS, DEFAULT_SPEAKER } from "./constants";
+import Toast from "./components/ui/Toast";
+import CompatibilityWarning from "./components/ui/CompatibilityWarning";
+import NetworkStatus from "./components/ui/NetworkStatus";
+import LoadingOverlay from "./components/LoadingOverlay";
+import MainContentCard from "./components/MainContentCard";
+import TextInputSection from "./components/TextInputSection";
+import SpeakerSelector from "./components/SpeakerSelector";
+import GenerateButton from "./components/GenerateButton";
+import { DEFAULT_SPEAKER } from "./constants";
+import { validateText } from "@utils/validation";
+import { useCompatibilityCheck } from "@hooks/useCompatibilityCheck";
+import { useNetworkStatus } from "@hooks/useNetworkStatus";
+import { useAudioGenerator } from "@hooks/useAudioGenerator";
 
 function App() {
-  // 界面状态
-  // llm ready 大模型准备好了不？
-  const [ready, setReady] = useState(null);
-  // 按钮点击 防止多次点击
-  const [disabled, setDisabled] = useState(false);
-  // 进度条数组
-  const [progressItems, setProgressItems] = useState([]);
-  // 表单文本
-  const [text, setText] = useState("I love Hugging Face!");
-  // 音色
+  // 兼容性检查
+  const { isCompatible, missingFeatures, isChecking } = useCompatibilityCheck();
+
+  // 网络状态监控
+  const { isOnline, wasOffline } = useNetworkStatus();
+
+  // UI 状态
+  const [text, setText] = useState("I love Xiangxiang!");
   const [selectedSpeaker, setSelectedSpeaker] = useState(DEFAULT_SPEAKER);
-  const [output, setOutput] = useState(null);
+  const [toast, setToast] = useState(null);
 
-  const worker = useRef(null);
-  useEffect(() => {
-    // 引入 transformer
-    // http://localhost:5173/worker.js
-    worker.current = new Worker(new URL("./worker.js", import.meta.url), {
-      type: "module",
-    });
+  const maxLength = 1000;
 
-    const onMessageReceived = (e) => {
-      // console.log(e, '来自主线程');
-      switch (e.data.status) {
-        case "initiate":
-          // llm ready 了吗？
-          setReady(false);
-          setProgressItems((prev) => [...prev, e.data]);
-          break;
-        case "progress":
-          // console.log(e.data)
-          setProgressItems((prev) =>
-            prev.map((item) => {
-              if (item.file === e.data.file) {
-                return {
-                  ...item,
-                  progress: e.data.progress,
-                };
-              }
-              return item;
-            })
-          );
-          break;
-        case "done":
-          setProgressItems((prev) =>
-            prev.filter((item) => item.file !== e.data.file)
-          );
-          break;
-        case "ready":
-          setReady(true);
-          break;
-        case "complete":
-          setDisabled(false);
-          const blobUrl = URL.createObjectURL(e.data.output);
-          // console.log(blobUrl);
-          setOutput(blobUrl);
-          break;
-      }
-    };
-    worker.current.onmessage = onMessageReceived;
-
-    return () =>
-      worker.current.removeEventListener("message", onMessageReceived);
+  // Toast 回调
+  const showToast = useCallback((type, message) => {
+    setToast({ type, message });
   }, []);
 
-  const handleGenerateSpeech = () => {
-    setDisabled(true);
-    worker.current.postMessage({
-      text,
-      speaker_id: selectedSpeaker,
-    });
-  };
+  const handleSuccess = useCallback(
+    (message) => showToast("success", message),
+    [showToast]
+  );
+  const handleError = useCallback(
+    (message) => showToast("error", message),
+    [showToast]
+  );
+  const handleInfo = useCallback(
+    (message) => showToast("info", message),
+    [showToast]
+  );
 
-  const isLoading = ready === false;
+  // 音频生成逻辑
+  const { ready, disabled, progressItems, output, isLoading, generateSpeech } =
+    useAudioGenerator(isCompatible, handleSuccess, handleError, handleInfo);
+
+  // 处理语音生成
+  const handleGenerateSpeech = useCallback(() => {
+    // 验证输入
+    const validation = validateText(text, maxLength);
+
+    if (!validation.isValid) {
+      showToast("error", validation.error);
+      return;
+    }
+
+    // 检查网络状态（首次加载需要网络）
+    if (!isOnline && ready === null) {
+      showToast("error", "首次使用需要网络连接来下载模型");
+      return;
+    }
+
+    // 生成语音
+    generateSpeech(text, selectedSpeaker);
+  }, [
+    text,
+    selectedSpeaker,
+    maxLength,
+    ready,
+    isOnline,
+    generateSpeech,
+    showToast,
+  ]);
+
+  // 处理键盘事件（支持 Ctrl+Enter 生成）
+  const handleKeyDown = useCallback(
+    (e) => {
+      if (e.ctrlKey && e.key === "Enter") {
+        e.preventDefault();
+        handleGenerateSpeech();
+      }
+    },
+    [handleGenerateSpeech]
+  );
+
+  // 验证状态
+  const validation = validateText(text, maxLength);
+  const isTextValid = validation.isValid;
+
+  // 浏览器兼容性检查中
+  if (isChecking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-cyan-50 to-blue-100">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 text-blue-500 animate-spin mx-auto mb-4" />
+          <p className="text-gray-600">正在检查浏览器兼容性...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 浏览器不兼容
+  if (!isCompatible) {
+    return <CompatibilityWarning missingFeatures={missingFeatures} />;
+  }
 
   return (
-    <div className="min-h-screen flex justify-center items-center bg-gray-100">
-      {/* llm 初始化 */}
-      <div
-        className="absolute z-50 top-0 left-0 w-full h-full transition-all 
-      px-8 flex flex-col justify-center text-center"
-        style={{
-          opacity: isLoading ? 1 : 0,
-          pointerEvents: isLoading ? "all" : "none",
-          background: "rgba(0,0,0,0.9)",
-          backdropFilter: "blur(8px)",
-        }}
-      >
-        {isLoading && (
-          <label className="text-white text-xl p-3">
-            Loading models... (only run once)
-          </label>
-        )}
-        {progressItems.map((data) => (
-          <div key={`${data.name}/${data.file}`}>
-            <Progress
-              text={`${data.name}/${data.file}`}
-              percentage={data.progress}
-            />
+    <div className="min-h-screen flex justify-center items-center bg-gradient-to-br from-blue-50 via-cyan-50 to-blue-100 animate-gradient-x p-4">
+      {/* 网络状态提示 */}
+      <NetworkStatus isOnline={isOnline} wasOffline={wasOffline} />
+
+      {/* Toast 通知 */}
+      {toast && (
+        <Toast
+          type={toast.type}
+          message={toast.message}
+          onClose={() => setToast(null)}
+        />
+      )}
+
+      {/* 加载遮罩 */}
+      <LoadingOverlay isLoading={isLoading} progressItems={progressItems} />
+
+      {/* 主内容卡片 */}
+      <MainContentCard showFooter={!output} modelReady={ready}>
+        {/* 文本输入区 */}
+        <TextInputSection
+          text={text}
+          onChange={setText}
+          onKeyDown={handleKeyDown}
+          disabled={disabled}
+          maxLength={maxLength}
+        />
+
+        {/* 音色选择 */}
+        <SpeakerSelector
+          value={selectedSpeaker}
+          onChange={setSelectedSpeaker}
+          disabled={disabled}
+        />
+
+        {/* 生成按钮 */}
+        <GenerateButton
+          onClick={handleGenerateSpeech}
+          disabled={disabled}
+          isTextValid={isTextValid}
+          isGenerating={disabled}
+        />
+
+        {/* 音频播放器 */}
+        {output && (
+          <div className="animate-slide-up">
+            <AudioPlayer audioUrl={output} />
           </div>
-        ))}
-      </div>
-      {/* tts 功能区 */}
-      <div className="bg-white p-8 rounded-lg w-full max-w-xl m-2">
-        <h1 className="text-3xl font-semibold text-gray-800 mb-1 text-center">
-          In browser Text To Speech(端模型)
-        </h1>
-        <h2 className="text-base font-medium text-gray-700 mb-2 text-center">
-          Made with <a> Transfromer.js</a>
-        </h2>
-        <div className="mb-4">
-          <label
-            htmlFor="text"
-            className="block text-sm font-medium text-gray-600"
-          >
-            Text
-          </label>
-          <textarea
-            id="text"
-            className="border border-gray-300 rounded-md p-2 w-full"
-            rows="4"
-            placeholder="Enter text here"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          ></textarea>
-        </div>
-        <div className="mb-4">
-          <label
-            htmlFor="speaker"
-            className="block text-sm font-medium text-gray-600"
-          ></label>
-          <select
-            id="speaker"
-            className="border border-gray-300 rounded-md p-2 w-full"
-            value={selectedSpeaker}
-            onChange={(e) => setSelectedSpeaker(e.target.value)}
-          >
-            {
-              // 可迭代对象快速转换成数组 [[key:val],[key1:value1],[key2:value1]]
-              Object.entries(SPEAKERS).map(([key, value]) => (
-                <option key={key} value={value}>
-                  {key}
-                </option>
-              ))
-            }
-          </select>
-        </div>
-        <div className="flex justify-center">
-          <button
-            className={`${
-              disabled
-                ? "bg-gray-400 cursor-not-allowed"
-                : "bg-blue-500 hover-bg-blue-600"
-            } text-white rouned-md py-2 px-4`}
-            onClick={handleGenerateSpeech}
-            disabled={disabled}
-          >
-            {disabled ? "Generating..." : "Generate"}
-          </button>
-        </div>
-        {output && <AudioPlayer audioUrl={output} mimeType={"audio/wav"} />}
-      </div>
+        )}
+      </MainContentCard>
     </div>
   );
 }
