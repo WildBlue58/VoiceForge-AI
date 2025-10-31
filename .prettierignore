@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+.next/
+.cache/
+coverage/
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+*.min.js
+*.min.css
+public/
+.DS_Store
+
